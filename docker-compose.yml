@@ -1,0 +1,122 @@
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - order-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - order-net
+
+  cassandra:
+    image: cassandra:4.0
+    container_name: cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: OrderCluster
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+      - ./cassandra/init.cql:/init.cql
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    networks:
+      - order-net
+
+  cassandra-init:
+    image: cassandra:4.0
+    container_name: cassandra-init
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./cassandra/init.cql:/init.cql
+    command: cqlsh cassandra -f /init.cql
+    networks:
+      - order-net
+
+  spark:
+    image: apache/spark:3.5.9-scala2.12-java17-python3-ubuntu
+    container_name: spark
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.master.Master
+      --host 0.0.0.0
+      --port 7077
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ./spark:/opt/spark-apps
+    networks:
+      - order-net
+
+  spark-worker:
+    image: apache/spark:3.5.9-scala2.12-java17-python3-ubuntu
+    container_name: spark-worker
+    command: >
+      /opt/spark/bin/spark-class
+      org.apache.spark.deploy.worker.Worker
+      spark://spark:7077
+    depends_on:
+      - spark
+    environment:
+      SPARK_WORKER_MEMORY: 1G
+      SPARK_WORKER_CORES: 1
+    networks:
+      - order-net
+
+  producer:
+    build: ./producer
+    container_name: order-producer
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BROKER: kafka:29092
+      KAFKA_TOPIC: order-events
+    networks:
+      - order-net
+
+  simulator:
+    build: ./simulator
+    container_name: order-simulator
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BROKER: kafka:29092
+      KAFKA_TOPIC: order-events
+    networks:
+      - order-net
+
+volumes:
+  cassandra-data:
+
+networks:
+  order-net:
+    driver: bridge
