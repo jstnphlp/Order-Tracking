@@ -92,6 +92,32 @@ services:
     networks:
       - order-net
 
+  backend:
+    build: ./backend
+    container_name: order-api
+    depends_on:
+      cassandra-init:
+        condition: service_completed_successfully
+    environment:
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_KEYSPACE: ecommerce
+      KAFKA_BROKER: kafka:29092
+      KAFKA_TOPIC: order-events
+    ports:
+      - "8000:8000"
+    networks:
+      - order-net
+
+  frontend:
+    build: ./frontend
+    container_name: order-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    networks:
+      - order-net
+
   producer:
     build: ./producer
     container_name: order-producer
