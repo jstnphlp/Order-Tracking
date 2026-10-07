@@ -3,10 +3,13 @@
 from collections import namedtuple
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
 from cassandra import OperationTimedOut
 from cassandra.cluster import NoHostAvailable
+from cassandra.encoder import Encoder
+from cassandra.query import bind_params
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from kafka.errors import KafkaTimeoutError, NoBrokersAvailable
@@ -306,8 +309,19 @@ def test_tracked_orders_are_loaded_outside_the_sample(api):
     result = client.get("/api/orders?limit=1&tracked=NEW&tracked=NEW&tracked=OLD")
     assert result.status_code == 200
     assert {order["order_id"] for order in result.json()["items"]} == {"OLD", "NEW"}
-    assert db.calls[1][1] == (("NEW",),)
+    assert db.calls[1] == ("SELECT * FROM orders WHERE order_id IN (%s)", ("NEW",))
     assert next(order for order in result.json()["items"] if order["order_id"] == "NEW")["allowed_statuses"] == ["CONFIRMED"]
+
+
+@pytest.mark.parametrize("tracked", [("NEW",), ("NEW", "OTHER'ORDER")])
+def test_tracked_query_binds_a_cql_value_list(api, tracked):
+    client, db = api
+    result = client.get("/api/orders?" + urlencode({"tracked": tracked}, doseq=True))
+    assert result.status_code == 200
+    query, parameters = db.calls[1]
+    encoded = bind_params(query, parameters, Encoder())
+    expected = ", ".join("'" + order_id.replace("'", "''") + "'" for order_id in tracked)
+    assert encoded == f"SELECT * FROM orders WHERE order_id IN ({expected})"
 
 
 def test_tracked_partition_reads_are_bounded(api):

@@ -106,7 +106,7 @@ def get_producer():
     with producer_lock:
         if producer is None:
             producer = KafkaProducer(
-                bootstrap_servers=os.getenv("KAFKA_BROKER", "localhost:9092"),
+                bootstrap_servers=os.getenv("KAFKA_BROKER", "127.0.0.1:9092"),
                 value_serializer=lambda event: json.dumps(event).encode("utf-8"),
                 acks="all",
                 retries=0,
@@ -200,7 +200,9 @@ def orders(limit: int = Query(100, ge=1, le=200),
     loaded = {row["order_id"] for row in rows}
     missing = tuple(dict.fromkeys(order_id for order_id in tracked if order_id not in loaded))
     if missing:
-        rows.extend(read_rows(db, "SELECT * FROM orders WHERE order_id IN %s", (missing,)))
+        rows.extend(read_rows(
+            db, "SELECT * FROM orders WHERE order_id IN %s", (missing,),
+        ))
     rows.sort(key=lambda row: row["updated_at"].isoformat() if row["updated_at"] else "", reverse=True)
     return {"items": [with_actions(row) for row in rows], "limit": limit, "scope": "sample"}
 

@@ -94,8 +94,10 @@ through Nginx and proxies `/api` to the backend.
 
 The backend accepts `CASSANDRA_HOST` (default `127.0.0.1`), `CASSANDRA_PORT`
 (default `9042`), and `CASSANDRA_KEYSPACE` (default `ecommerce`). Kafka publishing
-uses `KAFKA_BROKER` (default `localhost:9092`) and `KAFKA_TOPIC` (default
+uses `KAFKA_BROKER` (default `127.0.0.1:9092`) and `KAFKA_TOPIC` (default
 `order-events`). Docker configures the internal broker address automatically.
+The host listener also advertises `127.0.0.1:9092` so local Python clients use
+IPv4 when Docker or Podman forwards Kafka from WSL.
 The API connects lazily
 and returns HTTP 503 when Cassandra or the schema is unavailable.
 
@@ -290,6 +292,20 @@ You will see output like:
 ```
 
 > Keep this terminal open. This is your streaming processor running live.
+
+Submit the processor once. Additional submissions exit while a processor owns
+the checkpoint. If an older job fails with `Multiple streaming queries are
+concurrently using .../offsets`, stop all existing submissions by restarting the
+Spark containers, then submit once:
+
+```bash
+docker compose restart spark spark-worker
+docker exec spark bash /opt/spark-apps/submit.sh
+```
+
+Restarting these containers preserves the checkpoint and its Kafka offsets.
+Deleting the checkpoint resets progress; with `startingOffsets=latest`, the new
+query can skip events that arrived while Spark was stopped.
 
 ---
 

@@ -17,7 +17,9 @@ Run inside the Spark container (see submit.sh):
     /opt/spark-apps/spark_processor.py
 """
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -67,6 +69,28 @@ KAFKA_TOPIC        = "order-events"
 CASSANDRA_HOST     = "cassandra"
 CASSANDRA_KEYSPACE = "ecommerce"
 CASSANDRA_FORMAT   = "org.apache.spark.sql.cassandra"
+CHECKPOINT_LOCATION = "/tmp/checkpoints/order-processor"
+
+
+@contextmanager
+def checkpoint_lock():
+    """Allow only one processor to use this checkpoint in the Linux container."""
+    import fcntl
+
+    checkpoint = Path(CHECKPOINT_LOCATION)
+    checkpoint.mkdir(parents=True, exist_ok=True)
+    # Keep this file in place: closing the descriptor releases the lock, even
+    # after a crash. Unlinking it could let another process lock a different inode.
+    with (checkpoint / ".processor.lock").open("a") as lock_file:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit(
+                "[Spark] Another order processor is already using "
+                f"{CHECKPOINT_LOCATION}. Stop the existing processor before "
+                "submitting again."
+            ) from None
+        yield
 
 
 # ── Pure transformation helpers (no Kafka/Cassandra needed, easy to test) ─────
@@ -211,7 +235,7 @@ def make_batch_handler(spark):
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-def main():
+def run_processor():
     spark = (
         SparkSession.builder
         .appName("OrderTrackingProcessor")
@@ -236,13 +260,18 @@ def main():
         parse_events(raw_stream)
         .writeStream
         .foreachBatch(make_batch_handler(spark))
-        .option("checkpointLocation", "/tmp/checkpoints/order-processor")
+        .option("checkpointLocation", CHECKPOINT_LOCATION)
         .trigger(processingTime="5 seconds")
         .start()
     )
 
     print("[Spark] Streaming query started. Waiting for events...")
     query.awaitTermination()
+
+
+def main():
+    with checkpoint_lock():
+        run_processor()
 
 
 if __name__ == "__main__":
